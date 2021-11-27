@@ -113,6 +113,7 @@ class SolidMotor:
     def __init__(
         self,
         thrustSource,
+        massModel,
         burnOut,
         grainNumber,
         grainDensity,
@@ -179,6 +180,8 @@ class SolidMotor:
         -------
         None
         """
+        self.massModel = massModel
+
         # Thrust parameters
         self.interpolate = interpolationMethod
         self.burnOutTime = burnOut
@@ -372,12 +375,31 @@ class SolidMotor:
             of time.
         """
         # Create mass dot Function
+        
         self.massDot = self.thrust / (-self.exhaustVelocity)
         self.massDot.setOutputs("Mass Dot (kg/s)")
         self.massDot.setExtrapolation("zero")
 
         # Return Function
         return self.massDot
+
+        # massDot is expected to be a ndarray, massDot.source[:, 0]
+
+        # # Create mass dot Function
+        # # This shouldn't be used anywhere that affects the simulation but just in case.
+        # def massDot(t):
+        #     # Central difference formula
+        #     h = 1e-3
+        #     return (self.massModel.mass(t + h) - self.massModel.mass(t - h)) / (2 * h)
+
+        # self.massDot = Function(
+        #     massDot,
+        #     "Time (s)",
+        #     "Mass Dot (kg/s)",
+        # )
+
+        # # Return Function
+        # return self.massDot
 
     def evaluateMass(self):
         """Calculates and returns the total propellant mass curve by
@@ -396,26 +418,12 @@ class SolidMotor:
         self.mass : Function
             Total propellant mass as a function of time.
         """
-        # Retrieve mass dot curve data
-        t = self.massDot.source[:, 0]
-        ydot = self.massDot.source[:, 1]
-
-        # Set initial conditions
-        T = [0]
-        y = [self.propellantInitialMass]
-
-        # Solve for each time point
-        for i in range(1, len(t)):
-            T += [t[i]]
-            y += [y[i - 1] + 0.5 * (t[i] - t[i - 1]) * (ydot[i] + ydot[i - 1])]
 
         # Create Function
         self.mass = Function(
-            np.concatenate(([T], [y])).transpose(),
+            self.massModel.mass,
             "Time (s)",
             "Propellant Total Mass (kg)",
-            self.interpolate,
-            "constant",
         )
 
         # Return Mass Function
@@ -577,57 +585,41 @@ class SolidMotor:
             inertia Z.
         """
 
-        # Inertia I
-        # Calculate inertia I for each grain
-        grainMass = self.mass / self.grainNumber
-        grainMassDot = self.massDot / self.grainNumber
-        grainNumber = self.grainNumber
-        grainInertiaI = grainMass * (
-            (1 / 4) * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
-            + (1 / 12) * self.grainHeight ** 2
+        # Create Function
+        self.inertiaI = Function(
+            self.massModel.ixx,
+            "Time (s)",
+            "Propellant Inertia I (kg*m2)",
         )
 
-        # Calculate each grain's distance d to propellant center of mass
-        initialValue = (grainNumber - 1) / 2
-        d = np.linspace(-initialValue, initialValue, grainNumber)
-        d = d * (self.grainInitialHeight + self.grainSeparation)
+        def ixxDot(t):
+            # Central difference formula
+            h = 1e-3
+            return (self.massModel.ixx(t + h) - self.massModel.ixx(t - h)) / (2 * h)
 
-        # Calculate inertia for all grains
-        self.inertiaI = grainNumber * grainInertiaI + grainMass * np.sum(d ** 2)
-        self.inertiaI.setOutputs("Propellant Inertia I (kg*m2)")
-
-        # Inertia I Dot
-        # Calculate each grain's inertia I dot
-        grainInertiaIDot = (
-            grainMassDot
-            * (
-                (1 / 4) * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
-                + (1 / 12) * self.grainHeight ** 2
-            )
-            + grainMass
-            * ((1 / 2) * self.grainInnerRadius - (1 / 3) * self.grainHeight)
-            * self.burnRate
+        self.inertiaIDot = Function(
+            ixxDot,
+            "Time (s)",
+            "Propellant Inertia I Dot (kg*m2/s)",
         )
 
-        # Calculate inertia I dot for all grains
-        self.inertiaIDot = grainNumber * grainInertiaIDot + grainMassDot * np.sum(
-            d ** 2
+        # Create Function
+        self.inertiaZ = Function(
+            self.massModel.izz,
+            "Time (s)",
+            "Propellant Inertia Z (kg*m2)",
         )
-        self.inertiaIDot.setOutputs("Propellant Inertia I Dot (kg*m2/s)")
 
-        # Inertia Z
-        self.inertiaZ = (
-            (1 / 2.0)
-            * self.mass
-            * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
+        def izzDot(t):
+            # Central difference formula
+            h = 1e-3
+            return (self.massModel.izz(t + h) - self.massModel.izz(t - h)) / (2 * h)
+
+        self.inertiaZDot = Function(
+            izzDot,
+            "Time (s)",
+            "Propellant Inertia Z Dot (kg*m2/s)",
         )
-        self.inertiaZ.setOutputs("Propellant Inertia Z (kg*m2)")
-
-        # Inertia Z Dot
-        self.inertiaZDot = (1 / 2.0) * self.massDot * (
-            self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2
-        ) + self.mass * self.grainInnerRadius * self.burnRate
-        self.inertiaZDot.setOutputs("Propellant Inertia Z Dot (kg*m2/s)")
 
         return [self.inertiaI, self.inertiaZ]
 
