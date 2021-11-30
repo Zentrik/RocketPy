@@ -266,6 +266,8 @@ class SolidMotor:
         self.evaluateGeometry()
         self.evaluateInertia()
 
+        self.propellantInitialMass = self.mass.getValueOpt(0)
+
     def reshapeThrustCurve(
         self, burnTime, totalImpulse, oldTotalImpulse=None, startAtZero=True
     ):
@@ -374,32 +376,23 @@ class SolidMotor:
             Time derivative of total propellant mas as a function
             of time.
         """
+        # massDot is expected to be a ndarray, massDot.source[:, 0]
+
         # Create mass dot Function
-        
-        self.massDot = self.thrust / (-self.exhaustVelocity)
-        self.massDot.setOutputs("Mass Dot (kg/s)")
-        self.massDot.setExtrapolation("zero")
+        # This shouldn't be used anywhere that affects the simulation but just in case.
+        def massDot(t):
+            # Central difference formula
+            h = 1e-3
+            return (self.massModel.mass(t + h) - self.massModel.mass(t - h)) / (2 * h)
+
+        self.massDot = Function(
+            massDot,
+            "Time (s)",
+            "Mass Dot (kg/s)",
+        )
 
         # Return Function
         return self.massDot
-
-        # massDot is expected to be a ndarray, massDot.source[:, 0]
-
-        # # Create mass dot Function
-        # # This shouldn't be used anywhere that affects the simulation but just in case.
-        # def massDot(t):
-        #     # Central difference formula
-        #     h = 1e-3
-        #     return (self.massModel.mass(t + h) - self.massModel.mass(t - h)) / (2 * h)
-
-        # self.massDot = Function(
-        #     massDot,
-        #     "Time (s)",
-        #     "Mass Dot (kg/s)",
-        # )
-
-        # # Return Function
-        # return self.massDot
 
     def evaluateMass(self):
         """Calculates and returns the total propellant mass curve by
@@ -460,7 +453,8 @@ class SolidMotor:
         y0 = [self.grainInitialInnerRadius, self.grainInitialHeight]
 
         # Define time mesh
-        t = self.massDot.source[:, 0]
+        # t = self.massDot.source[:, 0]
+        t = np.linspace(0, self.burnOutTime, 100)
 
         density = self.grainDensity
         rO = self.grainOuterRadius
